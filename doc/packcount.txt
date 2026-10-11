@@ -1,0 +1,164 @@
+*packcount.txt*  Count vim.pack plugins with pending updates
+
+==============================================================================
+CONTENTS                                                   *packcount-contents*
+
+  1. Introduction ........................... |packcount-intro|
+  2. Configuration .......................... |packcount-config|
+  3. Statusline ............................. |packcount-statusline|
+  4. Commands ............................... |:Packcount|
+  5. Events ................................. |PackcountChanged|
+  6. Lua API ................................ |packcount-api|
+  7. Troubleshooting ........................ |packcount-health|
+
+==============================================================================
+1. INTRODUCTION                                               *packcount-intro*
+
+packcount.nvim counts |vim.pack| plugins with a pending update, so a
+statusline can show it. `vim.pack.get()` blocks while it fetches, so every
+check runs it in a separate headless Neovim process
+(`nvim --clean --headless -l`) and reads back the names of the plugins with
+updates.
+
+The check loop starts by itself on |UIEnter|. It fetches at most once per
+`frequency` seconds. The time of the last fetch lives in a state file that
+every running Neovim reads, so several instances don't each fetch. Between
+fetches it sleeps; when another instance fetched, it recounts offline.
+After |PackChanged| (e.g. |vim.pack.update()|) it recounts offline.
+
+A plugin whose fetch failed (no network, missing remote) keeps the status
+of its last successful fetch instead of looking up to date.
+
+Before reading, that Neovim compares the lockfile with the plugin directory.
+When they differ (e.g. after pulling a config with a new plugin), it
+reports an error instead of letting `vim.pack.get()` install or rewrite
+anything. The count stays as it was until Neovim syncs them itself.
+
+Requirements: Neovim 0.13+ with `vim.async`, and git. On older versions
+the plugin loads, but checks do nothing and the count stays 0.
+
+==============================================================================
+2. CONFIGURATION                                             *packcount-config*
+
+                                                                *g:packcount*
+Set `vim.g.packcount` to a table; every field is optional. It is read on
+first use, so it can be set anywhere in your config. >lua
+
+    vim.g.packcount = {
+      -- Run the check loop once a UI attaches.
+      autostart = true,
+      -- Seconds between online checks (git fetch), shared by all instances.
+      frequency = 3600,
+      -- Milliseconds a check may run before it is killed.
+      timeout = 150000,
+      -- JSON file holding the time of the last online check.
+      state_path = vim.fn.stdpath('state') .. '/packcount.json',
+      -- Prefix of the |packcount.updates()| text (Nerd Font package glyph).
+      icon = '\239\146\135 ',
+    }
+<
+An invalid value is reported once with the field name, and the defaults
+are used instead. |:checkhealth| also lists unknown keys.
+
+                                                         *g:loaded_packcount*
+Set `vim.g.loaded_packcount = true` before plugins load to disable it.
+
+==============================================================================
+3. STATUSLINE                                            *packcount-statusline*
+
+|packcount.updates()| returns the statusline text, |packcount.has_updates()|
+whether to show it. Both ignore their arguments. With lualine: >lua
+
+    {
+      require('packcount').updates,
+      cond = require('packcount').has_updates,
+    }
+<
+In a plain 'statusline': >vim
+
+    set statusline+=%{v:lua.require'packcount'.updates()}
+<
+To redraw as soon as the count changes, listen to |PackcountChanged|.
+
+==============================================================================
+4. COMMANDS                                                       *:Packcount*
+
+:Packcount [subcommand]
+
+    status      Show the count, the pending plugins and the last error.
+                The default.
+    check       Fetch every plugin now and recount.
+    recount     Recount from the last fetch, without network.
+    start       Start the background check loop.
+    stop        Stop the loop and kill a running check.
+
+==============================================================================
+5. EVENTS                                                   *PackcountChanged*
+
+`User PackcountChanged` fires after every recount, also when the count
+didn't change. `data.count` holds the new count. >lua
+
+    vim.api.nvim_create_autocmd('User', {
+      pattern = 'PackcountChanged',
+      callback = function(ev)
+        vim.cmd.redrawstatus()
+      end,
+    })
+<
+==============================================================================
+6. LUA API                                                      *packcount-api*
+
+All functions live in `require('packcount')`.
+
+count()                                                   *packcount.count()*
+    Number of plugins with a pending update.
+
+names()                                                   *packcount.names()*
+    Their names, sorted.
+
+has_updates()                                       *packcount.has_updates()*
+    Whether any plugin has a pending update.
+
+updates()                                               *packcount.updates()*
+    Statusline text: the `icon` option followed by the count, e.g.
+    `' 3'`, or `''` when no update is pending.
+
+set({plugins})                                              *packcount.set()*
+    Recount from |vim.pack.get()| data you already have, without starting
+    another Neovim. Pass every plugin. Plugins without `rev_to` keep their
+    status. For plugin manager UIs that read the revisions anyway.
+
+check({opts})                                             *packcount.check()*
+    Runs one check. `opts` is optional. `opts.offline = false` fetches
+    every remote first, otherwise the check stays offline.
+    Returns a `vim.async.Task`, or nil when checks can't run here. Checks
+    run one at a time. A failed check keeps the count and sets
+    |packcount.last_error|.
+
+refresh()                                               *packcount.refresh()*
+    Offline recount. Calls in quick succession lead to one recount.
+
+start()                                                   *packcount.start()*
+    Starts the check loop and the |PackChanged| recounts. Does nothing when
+    already running or unsupported.
+
+stop()                                                     *packcount.stop()*
+    Stops the loop and kills a running check.
+
+running()                                               *packcount.running()*
+    Whether the loop runs.
+
+supported()                                           *packcount.supported()*
+    Whether checks can run here: Neovim 0.13+, `vim.async` and git.
+
+last_error                                             *packcount.last_error*
+    Message of the last failed check, nil after a successful one.
+
+==============================================================================
+7. TROUBLESHOOTING                                           *packcount-health*
+
+Run `:checkhealth packcount`. It reports the requirements, configuration
+errors, unknown options, the state file, whether the loop runs and the
+last error.
+
+ vim:tw=78:ts=8:noet:ft=help:norl:
