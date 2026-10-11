@@ -159,6 +159,8 @@ end
 ---@return vim.SystemCompleted
 local function system(cmd)
 	local opts = { text = true, timeout = Config.get().timeout }
+	-- LuaLS can't resolve vim.async's generic return types, hence any.
+	---@type any
 	local result = vim.async.await(function(done)
 		local proc = vim.system(cmd, opts, done)
 		return {
@@ -218,11 +220,14 @@ function M.check(opts)
 				return decode(system(child_cmd(offline)))
 			end))
 			if ok then
+				---@cast result { pending?: string[], unknown?: string[] }
 				M.last_error = nil
 				apply(result.pending or {}, result.unknown or {})
 			else
 				M.last_error = tostring(result)
 			end
+			-- Semaphore:with() is annotated to need a return value.
+			return ok --[[@as any]]
 		end)
 	end))
 end
