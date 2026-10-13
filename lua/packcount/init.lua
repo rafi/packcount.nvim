@@ -135,19 +135,28 @@ function M.set(plugins)
 	apply(names, unknown)
 end
 
--- Command line for the background Neovim. `--clean` skips the user's
--- config. The lockfile and plugin dir come from the environment, plus
--- 'packlockfile' when this Neovim has that option.
+-- Environment for the background Neovim: the lockfile path, which child.lua
+-- sets as 'packlockfile' when this Neovim has that option. The plugin dir
+-- comes from the inherited XDG variables.
+---@return table<string, string>?
+local function child_env()
+	if vim.fn.exists('+packlockfile') == 1 then
+		return { PACKCOUNT_LOCKFILE = vim.go.packlockfile }
+	end
+end
+
+-- Command line for the background Neovim. `--clean` skips the user's config.
 ---@param offline boolean
 ---@return string[]
 local function child_cmd(offline)
-	local cmd = { vim.v.progpath, '--clean', '--headless' }
-	if vim.fn.exists('+packlockfile') == 1 then
-		local lockfile = vim.fn.fnameescape(vim.go.packlockfile)
-		vim.list_extend(cmd, { '--cmd', 'set packlockfile=' .. lockfile })
-	end
-	vim.list_extend(cmd, { '-l', child_path, offline and 'offline' or 'online' })
-	return cmd
+	return {
+		vim.v.progpath,
+		'--clean',
+		'--headless',
+		'-l',
+		child_path,
+		offline and 'offline' or 'online',
+	}
 end
 
 -- Runs `cmd` with vim.system() in a task. A vim.SystemObj has no close(), so
@@ -158,7 +167,8 @@ end
 ---@param cmd string[]
 ---@return vim.SystemCompleted
 local function system(cmd)
-	local opts = { text = true, timeout = Config.get().timeout }
+	local opts =
+		{ text = true, timeout = Config.get().timeout, env = child_env() }
 	-- LuaLS can't resolve vim.async's generic return types, hence any.
 	---@type any
 	local result = vim.async.await(function(done)

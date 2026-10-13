@@ -68,17 +68,19 @@ end
 -- Runs a headless `nvim --clean` with `args` in the scratch environment.
 ---@param args string[]
 ---@return vim.SystemCompleted
-local function scratch_nvim(args)
+local function scratch_nvim(args, extra_env)
 	local cmd = { vim.v.progpath, '--clean', '--headless' }
 	vim.list_extend(cmd, args)
-	return system(cmd, { env = scratch_env(), text = true }):wait(30000)
+	local env = vim.tbl_extend('force', scratch_env(), extra_env or {})
+	return system(cmd, { env = env, text = true }):wait(30000)
 end
 
 -- Runs child.lua the way the module does and decodes its last line.
 ---@param mode 'online'|'offline'
+---@param extra_env? table<string, string>
 ---@return table
-local function run_child(mode)
-	local res = scratch_nvim({ '-l', child_script, mode })
+local function run_child(mode, extra_env)
+	local res = scratch_nvim({ '-l', child_script, mode }, extra_env)
 	H.eq(res.code, 0)
 	local lines = vim.split(vim.trim(res.stdout), '\n')
 	return vim.json.decode(lines[#lines])
@@ -156,6 +158,22 @@ T['child.lua']['leaves the lockfile alone for an unlisted plugin dir'] = functio
 	local result = run_child('offline')
 	H.eq(vim.fn.readfile(lock_path), before)
 	H.expect.no_equality((result.error or ''):find('stray', 1, true), nil)
+end
+
+-- `:set packlockfile=` would expand `$VAR` in the path, so it travels in the
+-- environment.
+T['child.lua']['reads the lockfile named in PACKCOUNT_LOCKFILE'] = function()
+	install_test_plugin()
+	local _, lock_path = scratch_pack_paths()
+	local odd = tmp .. '/lock $PACKCOUNT_NOPE dir/lock.json'
+	vim.fn.mkdir(vim.fs.dirname(odd), 'p')
+	vim.fn.writefile(vim.fn.readfile(lock_path), odd)
+	-- Only the named file lists the plugin now.
+	vim.fn.delete(lock_path)
+	H.eq(
+		run_child('online', { PACKCOUNT_LOCKFILE = odd }),
+		{ pending = { 'packcount-test' }, unknown = {} }
+	)
 end
 
 T['child.lua']['refuses to run inside an editor session'] = function()
@@ -310,12 +328,12 @@ T['check()']['checks offline when called without opts'] = function()
 	H.eq(M.count(), 1)
 end
 
-T['check()']['passes packlockfile escaped'] = function()
+T['check()']['passes the lockfile through the environment'] = function()
 	if vim.fn.exists('+packlockfile') == 0 then
 		MiniTest.skip('this Neovim has no packlockfile option')
 	end
 	local saved = vim.go.packlockfile
-	local path = tmp .. '/with space/lock.json'
+	local path = tmp .. '/with space $VAR/lock.json'
 	vim.go.packlockfile = path
 	stub(reply_with({}))
 	local ok, err = pcall(function()
@@ -323,9 +341,28 @@ T['check()']['passes packlockfile escaped'] = function()
 	end)
 	vim.go.packlockfile = saved
 	assert(ok, err)
-	local cmd = calls[1].cmd
-	local at = vim.fn.index(cmd, '--cmd') + 1
-	H.eq(cmd[at + 1], 'set packlockfile=' .. vim.fn.fnameescape(path))
+	H.eq(calls[1].opts.env.PACKCOUNT_LOCKFILE, path)
+	H.eq(vim.fn.index(calls[1].cmd, '--cmd'), -1)
+end
+
+-- An erroring handler is reported by Neovim, and recounts go on.
+T['check()']['a failing PackcountChanged handler does not stop recounts'] = function()
+	vim.api.nvim_create_autocmd('User', {
+		group = 'packcount.test',
+		pattern = 'PackcountChanged',
+		callback = function()
+			error('boom')
+		end,
+	})
+	stub(reply_with({ 'a' }))
+	M.check({ offline = true }):wait(5000)
+	H.eq(M.count(), 1)
+	H.eq(M.last_error, nil)
+	stub(reply_with({ 'a', 'b' }))
+	M.check({ offline = true }):wait(5000)
+	H.eq(M.count(), 2)
+	H.eq(M.last_error, nil)
+	H.eq(notified, {})
 end
 
 T['check()']['keeps unknown plugins at their previous status'] = function()

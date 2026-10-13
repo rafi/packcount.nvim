@@ -11,6 +11,14 @@ if type(arg) ~= 'table' or not (arg[0] or ''):match('child%.lua$') then
 	error('run with nvim -l', 0)
 end
 
+-- The editor passes its lockfile path in the environment. Setting the option
+-- here needs no command-line escaping: `:set` expands `$VAR` even in an
+-- escaped path, and mangles Windows backslashes.
+local lockfile = vim.env.PACKCOUNT_LOCKFILE
+if lockfile and lockfile ~= '' and vim.fn.exists('+packlockfile') == 1 then
+	vim.go.packlockfile = lockfile
+end
+
 local offline = arg[1] == 'offline'
 
 -- vim.pack.get() first syncs the lockfile with the plugin dir: it installs
