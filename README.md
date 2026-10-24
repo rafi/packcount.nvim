@@ -1,13 +1,31 @@
 # packcount.nvim
 
-Counts [`vim.pack`](https://neovim.io/doc/user/pack.html#vim.pack) plugins
-with pending updates, for your statusline. Checks run in a separate headless
-Neovim process, so fetching never blocks the editor.
+See your pending plugin updates right in your statusline. It works with Neovim's
+built-in plugin manager, [`vim.pack`](https://neovim.io/doc/user/pack.html#vim.pack).
+It runs `vim.pack.get()` for you in a separate headless Neovim, so fetching
+never blocks your editor.
+
+<img src="https://raw.githubusercontent.com/rafi/assets/main/repo/packcount.nvim/statusline.png" alt="packcount.nvim count in the statusline" width="90%">
 
 - Fetches at most once per `frequency` (default 1 hour), shared by every
   running Neovim through a state file.
 - Recounts offline after `vim.pack.update()` (`PackChanged`).
 - Starts by itself once a UI attaches; headless scripts never fetch.
+
+## Light-weight
+
+- Neovim's own `vim.pack`, `vim.async` and `vim.system` do the work.
+- Built-in all the way down: a plugin counts when `vim.pack.get()` reports
+  a `rev_to` other than its `rev`, the count follows vim.pack's
+  `PackChanged` event, and you apply the updates with `:packupdate` (or
+  [packman.nvim](https://github.com/rafi/packman.nvim)).
+- Never touches your plugins or lockfile. When the lockfile and the plugin
+  directory disagree, the check reports it instead of letting
+  `vim.pack.get()` sync them in the background. A fetch only moves git's
+  remote-tracking refs, and the one file packcount writes holds the time
+  of the last fetch.
+- Its `plugin/` file only defines `:Packcount` and a `UIEnter` autocmd
+  that starts the loop.
 
 Requires Neovim 0.13+ (`vim.pack.get()` with `offline` and `rev_to`,
 `vim.async`) and git.
@@ -48,8 +66,15 @@ ignore their arguments, so lualine can use them as-is:
 }
 ```
 
-Or in a plain `'statusline'`:
-`%{v:lua.require'packcount'.updates()}`.
+Or in a plain `'statusline'`, redrawn when the count changes:
+
+```lua
+vim.o.statusline = "%f %m%=%{v:lua.require'packcount'.updates()} "
+vim.api.nvim_create_autocmd('User', {
+	pattern = 'PackcountChanged',
+	command = 'redrawstatus',
+})
+```
 
 `User PackcountChanged` fires with `data.count` after every recount.
 
@@ -66,17 +91,17 @@ Or in a plain `'statusline'`:
 
 ## API
 
-| Function | |
-|---|---|
-| `count()` | Number of plugins with a pending update |
-| `names()` | Their names, sorted |
-| `has_updates()` | Whether any update is pending |
-| `updates()` | Statusline text: `icon` and the count, `''` when none |
-| `set(plugins)` | Recount from `vim.pack.get()` data you already have |
-| `check({ offline })` | One check, offline unless `offline = false`; returns a `vim.async.Task` or nil when unsupported |
-| `refresh()` | Coalesced offline recount |
-| `start()` / `stop()` / `running()` | Background loop |
-| `last_error` | Message of the last failed check |
+| Function                           | Description                                                                                     |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `count()`                          | Number of plugins with a pending update                                                         |
+| `names()`                          | Their names, sorted                                                                             |
+| `has_updates()`                    | Whether any update is pending                                                                   |
+| `updates()`                        | Statusline text: `icon` and the count, `''` when none                                           |
+| `set(plugins)`                     | Recount from `vim.pack.get()` data you already have                                             |
+| `check({ offline })`               | One check, offline unless `offline = false`; returns a `vim.async.Task` or nil when unsupported |
+| `refresh()`                        | Coalesced offline recount                                                                       |
+| `start()` / `stop()` / `running()` | Background loop                                                                                 |
+| `last_error`                       | Message of the last failed check                                                                |
 
 See `:h packcount` and `:checkhealth packcount`.
 
@@ -85,4 +110,5 @@ See `:h packcount` and `:checkhealth packcount`.
 ```sh
 make test   # nvim -l tests/minit.lua, sandboxed under .tests/
 make lint   # stylua --check
+make demo   # re-take the screenshot with vhs, sandboxed under .demo/, into $ASSETS
 ```
